@@ -1,0 +1,444 @@
+---
+title: "Small Area Reproduzieren"
+format: html
+editor: visual
+---
+
+```{r}
+# Pakete
+install.packages("pacman")
+library(pacman)
+p_load("here")
+p_load("emdi", "saeSim", "kableExtra", "dplyr")
+
+# Daten laden
+R <- 500
+D <- 200
+Pop <- readRDS(here("data", "Pop.rds"))
+Pop_log <- readRDS(here("data", "Pop_log.rds"))
+FH_naive_try <- readRDS(here("data", "FH_naive_try.rds"))
+FH_naive_exp <- readRDS(here("data", "FH_naive_exp.rds"))
+models_rao  <- readRDS(here("data", "models_rao.rds"))
+models_raw  <- readRDS(here("data", "models_raw.rds"))
+```
+
+```{r}
+#| label: Creating Log_Distribution
+# p_load("emdi", "saeSim", "kableExtra", "dplyr")
+# 
+# R <- 500
+# D <- 200
+# 
+# #### LINEAR
+# for (D in c(200)){ #, 500, 1000, 2000
+#   
+#   set.seed(211215)
+#   
+#   sigmau2_trans <- 0.03
+#   
+#   vardir_trans <- sort(runif(D, 0.01, 0.12)) 
+#   
+#   log_inv_variance <- function(mu_log, v_log){exp(mu_log)^2 * v_log}
+#   
+#   gen_myE=function(dat, vardir = dat$vardir){
+#     tmp =  rnorm(nrow(dat), 0, sqrt(vardir))
+#     dat["e"] = tmp
+#     return(dat)
+#   }
+#   
+#   gen_X=function(dat){
+#     dat["x1"]=runif(nrow(dat), 0, 1)
+#     dat["x2"]=runif(nrow(dat), 0, 1)
+#     return(dat)
+#   }
+#   
+#   
+#   base_setup <- sim_base(data = base_id(nDomains = D, nUnits=rep(1, D))) %>%
+#     as.data.frame %>%
+#     mutate(vardir_trans = vardir_trans) dd
+#   
+#   
+#   ## S1: Linear ----
+#   
+#   setup = base_setup %>%
+#     sim_gen(generator=gen_myE) %>%
+#     sim_gen(gen_X)  %>% 
+#     sim_gen_v(mean = 0, sqrt(sigmau2_trans)) %>% 
+#     sim_resp_eq(model = "y ~ 5 + 2*x1 - 2*x2") %>%
+#     sim_resp_eq(lin_pred = 5 + 2*x1 - 2*x2 + v ) %>%
+#     sim_resp_eq(theta_direct = exp(lin_pred + e)  ) %>%
+#     sim_resp_eq(theta_true = exp(lin_pred)   ) %>%
+#     sim_resp_eq(vardir =  log_inv_variance(log(theta_direct), vardir_trans))
+#   
+#   
+#   Pop=sim(setup, R = R)
+#   Pop_lst <- list(Pop)
+#  #summary(Pop[[1]])
+#   #View(Pop)
+#   
+#   
+#   
+#   #f <- paste0("../simData/log_linear_D", D, "_",R, ".RData")
+#   #save(Pop, file= f)
+# }
+
+```
+
+```{r}
+#| label: Estimating log-Distribution FH_transformed (Slud)
+counter <- c()
+
+for (i in seq_along(Pop)) {
+  counter[i] <- nrow(Pop[[i]])
+}
+
+length(counter)
+
+models_slud <- NULL
+for (i in seq_along(Pop)) {
+  Pop[[i]]$y <- Pop[[i]]$theta_direct
+    df1 <- Pop[[i]]
+
+  models_slud[[i]] <- emdi::fh(
+    y ~ x1 + x2,
+    vardir = "vardir",
+    combined_data = df1,
+    domains = "idD",
+    transformation = "log",
+    backtransformation = "bc_sm",
+    method = "ml",
+    MSE = TRUE
+  )
+  print(i)
+}
+# 
+# #help(emdi)
+```
+
+```{r}
+#| label: Estimating log-Distribution FH_transformed (RAO)
+#| 
+# 
+# counter <- c()
+# 
+# for (i in seq_along(Pop)) {
+#   counter[i] <- nrow(Pop[[i]])
+# }
+# 
+# length(counter)
+# 
+# models_rao <- NULL
+# for (i in seq_along(Pop)) {
+#   Pop[[i]]$y <- Pop[[i]]$theta_direct
+#     df1 <- Pop[[i]]
+#   
+#   models_rao[[i]] <- emdi::fh(
+#     y ~ x1 + x2,
+#     vardir = "vardir",
+#     combined_data = df1,
+#     domains = "idD",
+#     transformation = "log",
+#     backtransformation = "bc_crude",
+#     method = "ml",
+#     MSE = TRUE
+#   )
+#   print(i)
+# }
+```
+
+```{r}
+#| label: Try naive option 2 
+# Zuerst Pop log() anwenden => dann FH ohne Transformation => Dann auf EBLUP exp() anwenden
+
+# Pop_log <- lapply(Pop, function(df) {
+#   df$y <- log(df$y)
+#   df$theta_direct <- log(df$theta_direct)
+#   return(df)
+# })
+# 
+# View(Pop)
+# View(Pop_log)
+# 
+# counter <- c()
+# 
+# for (i in seq_along(Pop)) {
+#   counter[i] <- nrow(Pop[[i]])
+# }
+# 
+# length(counter)
+# 
+# FH_naive_try <- NULL
+# for (i in seq_along(Pop_log)) {
+#   Pop_log[[i]]$y <- Pop_log[[i]]$theta_direct
+#     df1 <- Pop_log[[i]]
+#   
+#   FH_naive_try[[i]] <- emdi::fh(
+#     y ~ x1 + x2,
+#     vardir = "vardir_trans",
+#     combined_data = df1,
+#     domains = "idD",
+#     transformation = "no",
+#     method = "ml",
+#     MSE = TRUE
+#   )
+#   print(i)
+# }
+# View(FH_naive_try)
+# 
+# FH_naive_exp <- vector("list", length(FH_naive_try))
+# 
+# for (i in seq_along(FH_naive_try)) {
+#   df <- data.frame(
+#     Domain   = FH_naive_try[[i]]$ind$Domain,
+#     FH_naiv  = exp(FH_naive_try[[i]]$ind$FH),
+#     MSE_naiv = exp(FH_naive_try[[i]]$MSE$FH)
+#   )
+#   FH_naive_exp[[i]] <- df
+# }
+# 
+# 
+# View(FH_naive_exp)
+
+```
+
+```{r}
+#| label: Estimating log-Distribution FH_untransformed 
+#| 
+# counter <- c()
+# 
+# for (i in seq_along(Pop)) {
+#   counter[i] <- nrow(Pop[[i]])
+# }
+# 
+# length(counter)
+# 
+# models_raw <- NULL
+# for (i in seq_along(Pop)) {
+#   Pop[[i]]$y <- Pop[[i]]$theta_direct
+#     df1 <- Pop[[i]]
+#   
+#   models_raw[[i]] <- emdi::fh(
+#     y ~ x1 + x2,
+#     vardir = "vardir",
+#     combined_data = df1,
+#     domains = "idD",
+#     transformation = "no",
+#     #backtransformation = "bc_sm",
+#     method = "ml",
+#     MSE = TRUE
+#   )
+#   print(i)
+# }
+
+```
+
+```{r}
+#| label: Estimating log-Distribution FH_tranformed NO backtransform
+#| 
+# counter <- c()
+# 
+# for (i in seq_along(Pop)) {
+#   counter[i] <- nrow(Pop[[i]])
+# }
+# 
+# length(counter)
+# 
+# models_raw <- NULL
+# for (i in seq_along(Pop)) {
+#   Pop[[i]]$y <- Pop[[i]]$theta_direct
+#     df1 <- Pop[[i]]
+#   
+#   models_raw[[i]] <- emdi::fh(
+#     y ~ x1 + x2,
+#     vardir = "vardir",
+#     combined_data = df1,
+#     domains = "idD",
+#     method = "ml",
+#     MSE = TRUE
+#   )
+#   print(i)
+# }
+```
+
+```{r}
+#Diagnostic Plots
+
+plot(models_rao[[1]])
+```
+
+```{r}
+#| label: Quality Measures functions [(stolen ;)]
+# Help function with quality measures
+Qualitymeasures <- function (True.ind, Est.ind) {
+  True.mean <- True.ind
+  Est.mean <- Est.ind
+  m <- dim(True.mean)[1]
+  NoSim <- dim(True.mean)[2]
+  True.mean <- t(True.mean)
+  Est.mean <- t(Est.mean)
+  
+  
+  assign("m", m, pos = 1)
+  Bias <- rep(0, m)
+  RB <- rep(0, m)
+  RRMSE <- rep(0, m)
+  
+  True.MSE <- rep(0, m)
+  Est.MSE <- rep(0, m)
+  CV.MSE <- rep(0, m)
+  BIAS.MSE <- rep(0, m)
+  
+  for (i in 1:m) {
+    RB[i] <- mean(((Est.mean[, i]) - (True.mean[, i])) / (True.mean[, i]))
+    Bias[i] <- mean((Est.mean[, i]) - (True.mean[, i]))
+    RRMSE[i] <-
+      sqrt(mean((Est.mean[, i] - True.mean[, i]) ^ 2)) / mean(True.mean[, i])
+    True.MSE[i] <- mean((Est.mean[, i] - True.mean[, i]) ^ 2)
+  }
+  True.RootMSE = sqrt(True.MSE)
+  
+  list(
+    Bias = Bias,
+    RelBias = RB,
+    RelRMSE = RRMSE,
+    EmpRMSE = True.RootMSE
+  )
+}
+```
+
+```{r}
+#| label: Extract the indicators of interest
+### b) Extract the indicators of interest -------------------------------------------------
+
+true_mean <- matrix(NA, D, R)
+# Define matrices for the estimates of the indicators of interest
+FH_slud_mean <- matrix(NA, D, R)
+FH_naive_mean <- matrix(NA, D, R)
+FH_raw_mean <- matrix(NA, D, R)
+FH_rao_mean <- matrix(NA, D, R)
+
+
+
+for (i in 1:R) {
+  FH_slud_mean[, i] <- models_slud[[i]]$ind$FH
+  FH_naive_mean[, i] <- FH_naive_exp[[i]]$FH_naiv
+  FH_raw_mean[, i]  <- models_raw[[i]]$ind$FH
+  FH_rao_mean[, i]  <- models_rao[[i]]$ind$FH
+}
+
+for (i in seq_along(Pop)) {
+  true_mean[, i] <- Pop[[i]]$theta_true
+}
+```
+
+```{r}
+p_load("ggplot2")
+# Extract results for QSR
+# Berechnung der RMSE und Bias für die verschiedenen FH-Modelle basierend auf true_mean
+FH_raw_rmse   <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_raw_mean)$EmpRMSE
+FH_raw_bias   <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_raw_mean)$Bias
+
+FH_rao_rmse   <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_rao_mean)$EmpRMSE
+FH_rao_bias   <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_rao_mean)$Bias
+
+FH_slud_rmse  <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_slud_mean)$EmpRMSE
+FH_slud_bias  <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_slud_mean)$Bias
+
+FH_naive_rmse <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_naive_mean)$EmpRMSE
+FH_naive_bias <- Qualitymeasures(True.ind = true_mean, Est.ind = FH_naive_mean)$Bias
+
+# Bias
+BiasFh <-
+  as.data.frame(c(
+    FH_raw_bias,
+    FH_rao_bias,
+    FH_slud_bias
+    , FH_naive_bias
+  ))
+names(BiasFh)[1] <- "bias"
+BiasFh$method <- 0
+BiasFh$method[1:D] <- "FH raw"
+BiasFh$method[(D + 1):(2 * D)] <- "FH Rao"
+BiasFh$method[(2 * D + 1):(3 * D)] <- "FH Slud"
+BiasFh$method[(3 * D + 1):(4 * D)] <- "FH Naive"
+
+ggplot(BiasFh, aes(x = method, y = bias, fill = method)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(y = "Bias", x = "", title = "Mean Indicator") +
+  theme(legend.position = "none")
+
+# RMSE
+RmseFh <-
+  as.data.frame(c(
+    FH_raw_rmse,
+    FH_rao_rmse,
+    FH_slud_rmse
+    , FH_naive_rmse
+  ))
+names(RmseFh)[1] <- "rmse"
+RmseFh$method <- 0
+RmseFh$method[1:D] <- "FH raw"
+RmseFh$method[(D + 1):(2 * D)] <- "FH Rao"
+RmseFh$method[(2 * D + 1):(3 * D)] <- "FH Slud"
+RmseFh$method[(3 * D + 1):(4 * D)] <- "FH Naive"
+
+ggplot(RmseFh, aes(x = method, y = rmse, fill = method)) +
+  geom_boxplot() +
+  labs(y = "RMSE", x = "", title = "Mean Indicator") +
+  theme(legend.position = "none")
+```
+
+```{r}
+methods <- c("FH_untransformed", "log_FH_crude", "log_FH_slud", "log_FH_naive")
+
+df_summary <- data.frame(
+  Method = methods,
+  
+  RMSE_Mean = round(c(
+    mean(FH_raw_rmse, na.rm = TRUE),
+    mean(FH_rao_rmse, na.rm = TRUE),
+    mean(FH_slud_rmse, na.rm = TRUE),
+    mean(FH_naive_rmse, na.rm = TRUE)
+  ), 3),
+  
+  RMSE_Median = round(c(
+    median(FH_raw_rmse, na.rm = TRUE),
+    median(FH_rao_rmse, na.rm = TRUE),
+    median(FH_slud_rmse, na.rm = TRUE),
+    median(FH_naive_rmse, na.rm = TRUE)
+  ), 3),
+  
+  Bias_Mean = round(c(
+    mean(FH_raw_bias, na.rm = TRUE),
+    mean(FH_rao_bias, na.rm = TRUE),
+    mean(FH_slud_bias, na.rm = TRUE),
+    mean(FH_naive_bias, na.rm = TRUE)
+  ), 3),
+  
+  Bias_Median = round(c(
+    median(FH_raw_bias, na.rm = TRUE),
+    median(FH_rao_bias, na.rm = TRUE),
+    median(FH_slud_bias, na.rm = TRUE),
+    median(FH_naive_bias, na.rm = TRUE)
+  ), 3)
+)
+
+kable(df_summary, caption = "RMSE and Bias (Mean and Median)", booktabs = TRUE) %>%
+  kable_styling(full_width = FALSE)
+
+```
+
+```{r}
+library(knitr)
+library(kableExtra)
+
+# Tabelle erzeugen und als LaTeX-Code exportieren
+latex_table <- kable(df_summary, 
+                     format = "latex", 
+                     caption = "RMSE and Bias (Mean and Median)", 
+                     booktabs = TRUE) %>%
+  kable_styling(full_width = FALSE)
+
+cat(latex_table)
+```
