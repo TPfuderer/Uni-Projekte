@@ -1,0 +1,27 @@
+# 1) Doku neu
+devtools::document()
+
+# 2) Tarball bauen und Pfad merken (in ein Temp-Verzeichnis)
+tarball <- devtools::build(".", path = tempdir())
+tarball
+# -> gibt dir den vollen Pfad, z.B. "C:/Users/.../Temp/Rtmp.../boostedrirt_0.1.0.tar.gz"
+
+# 3) Aus genau diesem Pfad installieren
+remotes::install_local(tarball,
+                       dependencies = TRUE,
+                       type = "source",
+                       upgrade = "never",
+                       force = TRUE
+)
+
+# 4) Kurztest
+library(boostedrirt)
+set.seed(1)
+df_smoke <- data.frame(
+  id = factor(rep(1:8, each = 3)),
+  y  = rnorm(24),
+  p1 = rnorm(24),
+  p2 = runif(24)
+)
+out <- run_boostedRIRT(df_smoke, c("p1","p2"), "y", "id", iter_max = 10, maxdepth = 2)
+print(out$model); plot(out$model); head(predict(out$model))

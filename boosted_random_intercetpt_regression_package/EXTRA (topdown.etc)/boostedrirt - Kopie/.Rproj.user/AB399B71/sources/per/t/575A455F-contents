@@ -1,0 +1,24 @@
+Package: boostedrirt
+Type: Package
+Title: Boosted Random Intercept Regression Trees
+Version: 0.1.0
+Authors@R: c(
+    person(given = "Tristan", family = "Pfuderer", email = "tristan-aaron.pfuderer@stud.uni-bamberg.de", role = c("aut","cre"))
+ )
+Description: Tolles, cooles, state-of-the-art Paket für Boosted Random Intercept Regression Trees mit 5-facher Kreuzvalidierung. 
+License: MIT + file LICENSE
+Depends: R (>= 4.1.0)
+Imports:
+    checkmate,
+    cvTools,
+    rpart,
+    lme4,
+    stats,
+    graphics,
+Suggests:
+    testthat (>= 3.0.0),
+    datasets
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Config/testthat/edition: 3

@@ -1,0 +1,28 @@
+{
+    "id": "9F7BF68C",
+    "path": "~/R Projekt Small Area/boostedrirt/man/run_boostedRIRT.Rd",
+    "project_path": "man/run_boostedRIRT.Rd",
+    "type": "r_doc",
+    "hash": "1100912486",
+    "contents": "",
+    "dirty": false,
+    "created": 1755721165885.0,
+    "source_on_save": false,
+    "relative_order": 7,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "0,0",
+        "scrollLine": "24"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1755773558,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1755773558,
+    "read_only": true,
+    "read_only_alternatives": [
+        "R/run_boostedRIRT.R"
+    ]
+}

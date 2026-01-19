@@ -1,0 +1,80 @@
+---
+title: "TopDown"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{TopDown}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(boostedrirt)
+```
+
+
+Ziel von boostedrirt ist es, iterativ einen „Boosted Random Intercept Regression Tree“
+zu erzeugen. Dabei wird die Stärke von Regressionsbäumen bei Nichtlinearität mit einem
+Random-Intercept-Linear-Mixed-Model kombiniert, um gruppenspezifische Effekte abzu
+bilden. 
+
+Typische Anwendungsfälle sind Daten mit Clustern/Gruppen, in denen systematische
+Unterschiede vorherrschen, z. B. Schulen, Universitäten, Small-Area-Analysen oder Zeitreihen
+mit einem Cluster pro Subjekt. Das Paket nutzt hierfür eine 5-fache Cross-Validation (CV).
+Wir starten mit einem Intercept ß0/f0. Auf Basis dieses Intercepts berechnen wir den Gra
+dienten (Residuen), den ein reines Intercept-Modell nicht erklärt, und trainieren darauf einen
+Regression Tree. Verbleibende, vermutlich gruppenbasierte Unterschiede werden über ein Ran
+dom Intercept geschätzt. Beide Beiträge werden mit einer Lernrate kombiniert, um Overfitting
+zu vermeiden, und verbessern pro Iteration die Vorhersage, bis keine Verbesserung mehr mess
+bar ist oder 100 Iterationen erreicht sind. Die Lernrate sorgt dafür, dass das Modell bei jeder
+Iteration leicht besser wird und nicht sofort den Fehler korrigiert. Die Verbesserung messen
+wir am RMSE. Das resultierende Modellobjekt kann über S3-Methoden genutzt werden
+
+Pseudocode: 
+
+Algorithmus BoostedRIRT:
+
+1. Eingabe prüfen:
+   - Datenrahmen enthält ID, Zielvariable und Features?
+   - Zielvariable numerisch, hat Varianz?
+   - ID ist Faktor?
+
+2. Parameter-Tuning mit Cross-Validation:
+   - Für verschiedene Kombinationen von colsample und subsample:
+       - Trainiere einen Proxy-Baum
+       - Berechne Fehler (RMSE)
+   - Wähle beste Parameter
+
+3. Boosting-Training mit K-fold-CV:
+   Für jede Iteration
+   
+       a) Teile Daten in Trainings- und Test-Folds
+       
+       b) Starte mit f0 = Mittelwert(y_train) (Intercept Model)
+       
+       c) Berechne Residuen = y - f
+       
+       d) Fit CART-Baum auf Residuen (Teilstichprobe von Zeilen/Spalten)
+       
+       e) Berechne neue Residuen (Nach Baum)
+       
+       f) Fit Random-Intercept-Modell auf Residuen
+       
+       g) Update Vorhersage: f_neu = f_alt + α * (Baum + (LMM - β0))
+       
+       h) Berechne RMSE; prüfe Frühstopp-Kriterium
+
+4. Trainiere finales Modell auf allen Daten mit besten Parametern.
+
+5. Ausgabe:
+   - Beste Parameter
+   - Cross-Validation-Zusammenfassung
+   - Trainingshistorie (RMSE pro Iteration)
+   - Finale Modellvorhersagen
+   - S3-Modellobjekt für print/plot/predict

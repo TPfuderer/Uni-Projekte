@@ -1,0 +1,18 @@
+library(boostedrirt)
+
+mod <- run_boostedRIRT(
+  df,
+  x_cols   = c("p1","p2"),
+  y_col    = "y",
+  id_col   = "id",
+  iter_max = 100,
+  alpha    = 0.1,
+  folds    = 5,
+  seed     = 4242,
+  maxdepth = 3
+)
+
+class(mod)      # sollte "boostedRIRT" enthalten
+preds <- predict(mod)   # KEIN newdata, gibt fitted_values zurück
+plot(mod)               # RMSE-Verlauf
+print(mod)

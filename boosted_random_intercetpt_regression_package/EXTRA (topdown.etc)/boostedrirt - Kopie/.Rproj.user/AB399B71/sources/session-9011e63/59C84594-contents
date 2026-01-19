@@ -1,0 +1,439 @@
+#' @title Führe Boosted Random Intercept Regression Trees aus
+#' @description ABC
+#' Bootrirt
+#' @param df Data Frame mit \code{y_col}, \code{id_col} und Prädiktoren.
+#' @param x_cols Prädiktoren (nur numerisch/integer).
+#' @param y_col Abhängige outcome Variable (numerisch).
+#' @param id_col Name der Cluster-ID "id"(Faktor) für Random Intercepts.
+#' @param iter_max = 100 standard Maximale Anzahl Boosting-Iterationen.
+#' @param alpha = 0.1 Standard Lernrate.
+#' @param folds = 5 Standard Anzahl der CV-Folds (gruppiert nach \code{id_col}).
+#' @param seed (4242) Standard Zufallsstartwert für die Fold-Erzeugung.
+#' @param maxdepth = 3 Standard, Maximale Baumtiefe für CART-Basislerner.
+#'
+#' @return Liste mit \code{best_params}, \code{cv_summary}, \code{step3_out},
+#' \code{step4_out} sowie \code{model} (S3-Klasse \code{boostedRIRT}).
+#' @examples
+#' \donttest{
+#' set.seed(1)
+#' df_ex <- data.frame(
+#'   id = factor(rep(1:8, each = 3)),
+#'   y  = rnorm(24),
+#'   p1 = rnorm(24),
+#'   p2 = runif(24)
+#' )
+#' out_ex <- run_boostedRIRT(
+#'   df       = df_ex,
+#'   x_cols   = c("p1","p2"),
+#'   y_col    = "y",
+#'   id_col   = "id",
+#'   iter_max = 3,      # kurz halten für CRAN-Examples
+#'   alpha    = 0.1,
+#'   folds    = 3,
+#'   seed     = 42,
+#'   maxdepth = 2
+#' )
+#' print(out_ex$model) }
+
+
+#' @export
+run_boostedRIRT <- function(df, #Standard
+                            x_cols = c("p1", "p2"), #more than two possible
+                            y_col = "y", #outcome
+                            id_col = "id", #group variable
+                            iter_max = 100, #gives stopping value
+                            alpha = 0.1, #learning rate for algo
+                            folds = 5, #for CV
+                            seed = 4242,
+                            maxdepth = 3) { #tree depth in rpart
+
+  # 0. Input Checks ---------------------------------------------------------
+
+  input_checks <- function(data, id_col, y_col) {
+    checkmate::assert_data_frame(data, min.rows = 1, min.cols = 3)
+    checkmate::assert_names(names(data), must.include = c(id_col, y_col))
+    checkmate::assert_numeric(data[[y_col]], any.missing = FALSE, finite = TRUE)
+    x_cols <- setdiff(names(data), c(id_col, y_col))
+    checkmate::assert_true(
+      length(x_cols) >= 1,
+      .var.name = "X (Feature-Spalten)"
+    )
+    checkmate::assert_data_frame(data[x_cols], types = c("numeric", "integer"))
+    checkmate::assert_true(
+      stats::var(data[[y_col]]) > 0,
+      .var.name = "Var(Y) > 0"
+    ) #Ensuring Variation in Y
+    checkmate::assert_factor(
+      data[[id_col]],
+      any.missing = FALSE,
+      null.ok = FALSE
+    )
+    invisible(TRUE)
+  }
+
+  input_checks(df, id_col, y_col) #run function from above
+
+
+  # 1 und 2 CV 5-fach und Parametertuning -----------------------------------
+
+  x <- df[x_cols] #define variables from user selection
+  y <- df[[y_col]]
+  id <- base::factor(df[[id_col]])
+
+  fit_proxy <- function(x, #needed to compute Parametertuning
+                        y,
+                        colsample = 1,
+                        subsample = 1) {
+    n <- nrow(x) #number of observations
+    p <- ncol(x) #number features
+
+    keep_n <- max(1, floor(subsample * n)) #e.g.subsample = 0.7
+    keep_p <- max(1, floor(colsample * p)) #then 0.7*n(100) = keep 70
+
+    #pull samples from observations
+    rows <- if (keep_n < n) {
+      base::sample.int(n, keep_n)
+    } else {
+      base::seq_len(n)
+    }
+
+    #pull samples from features
+    cols <- if (keep_p < p) {
+      base::sample(base::seq_len(p), keep_p)
+    } else {
+      base::seq_len(p)
+    }
+
+    #Datafrme for the Tree
+    dat <- data.frame(y = y[rows], x[rows, cols, drop = FALSE])
+
+    #Proxy Tree to do CV
+    rpart::rpart(y ~ .,
+      data = dat,
+      control = rpart::rpart.control(maxdepth = 3, cp = 0)
+    )
+  }
+
+  #CV tools package to do Cross Validaton and
+  #Parametertuning for model Training
+  res <- cvTools::cvTuning(
+    object = fit_proxy,
+    x = x,
+    y = y,
+    tuning = list(
+      colsample = c(0.6, 1.0),
+      subsample = c(0.7, 1.0)
+    ),
+    K = folds,
+    grouping = id,
+    cost = cvTools::rmspe
+  )
+
+  grid <- base::expand.grid(res$tuning)
+
+  #Index der besten Paramterkombination rausziehen um in Iterativen Algorithmus
+  #zu nutzen
+  best_idx <- if (is.list(res$best)) {
+    res$best$CV
+  } else {
+    base::as.integer(res$best)
+  }
+
+  #Tatsächlich beste Kombination zum verwenden in Schleife
+  best_params <- grid[best_idx, , drop = FALSE]
+
+
+  # 3. Trainingsalgorithmus -------------------------------------------------
+
+  #Funktion um Modellgüte/Fehler zu messen
+  #desto kleiner, desto besser
+  rmse <- function(y, yhat) {
+    sqrt(mean((y - yhat)^2))
+  }
+
+  #Sicherstellen, dass jeder fold die richtigen
+  #ID Gruppen erkennt. Somit folden wir nach
+  #den Gruppen und nicht nach Zeilen
+  make_folds_by_id <- function(id_vec, K = folds, seed = seed) {
+    base::set.seed(seed)
+    u <- base::sample(base::unique(id_vec))
+    bins <- base::split(u, rep(1:K, length.out = length(u)))
+    lapply(bins, function(ids) {
+      which(id_vec %in% ids)
+    })
+  }
+
+  folds_list <- make_folds_by_id(id, K = folds, seed = seed)
+
+  #Aus Parametertuning ergebnissen
+  colsample <- as.numeric(best_params$colsample[1])
+  subsample <- as.numeric(best_params$subsample[1])
+
+  #Objekte zum speichern von Funktionsdaten
+  K_int <- length(folds_list)
+  rmse_train_hist <- matrix(NA_real_, nrow = iter_max, ncol = K_int)
+  rmse_test_hist <- matrix(NA_real_, nrow = iter_max, ncol = K_int)
+  mean_test_hist <- rep(NA_real_, iter_max)
+
+  y_train <- vector("list", K_int)
+  y_test <- vector("list", K_int)
+  x_train <- vector("list", K_int)
+  x_test <- vector("list", K_int)
+  id_train <- vector("list", K_int)
+  id_test <- vector("list", K_int)
+  f_train <- vector("list", K_int)
+  f_test <- vector("list", K_int)
+
+
+  for (fold in seq_len(K_int)) {
+
+    #Test/Train Split
+    test_idx <- folds_list[[fold]]
+    train_idx <- setdiff(seq_len(nrow(x)), test_idx)
+
+    #Speichern von Daten für
+    #jeden Train/Test SPlit
+    y_train[[fold]] <- y[train_idx]
+    y_test[[fold]] <- y[test_idx]
+    x_train[[fold]] <- x[train_idx, , drop = FALSE]
+    x_test[[fold]] <- x[test_idx, , drop = FALSE]
+
+    # ID (Gruppe) pro Split
+    id_train[[fold]] <- id[train_idx]
+    id_test[[fold]] <- id[test_idx]
+
+    #(1)
+    # Startwert f0 = Mittelwert der Trainings-Zielvariablen
+    # in diesem Fold
+    f0 <- mean(y_train[[fold]])
+
+    # Initiale Vorhersagen in Train/Test auf f0 setzen
+    f_train[[fold]] <- rep(f0, length(y_train[[fold]]))
+    f_test[[fold]] <- rep(f0, length(y_test[[fold]]))
+  }
+
+  #Tracker für Stopper der Iterationen
+  #wenn keine Verbesserung
+  best_iter <- 0L
+  best_mean <- Inf
+
+  # Haupt-Boosting-Schleife über Iterationen
+  for (iter in 1:iter_max) {
+    # Schleife über die K Folds (gruppierte CV nach id)
+    for (fold in seq_len(K_int)) {
+
+      #(2)
+      #(a)
+      # aktuelle Trainingsgröße (Zeilen/Spalten)
+      n_train <- nrow(x_train[[fold]])
+
+      p_train <- ncol(x_train[[fold]])
+
+      #floor(...) Rundet auf
+      #max(...) mindestends eine Zeile/Spalte
+      #subsample (x) n_train
+      #=> Anteil der Trainingsdaten*anzahl der Spalten
+      #ergibt die korrekte Sample Size
+      keep_n <- max(1, floor(subsample * n_train))
+      keep_p <- max(1, floor(colsample * p_train))
+      rows <- if (keep_n < n_train) {
+        base::sample.int(n_train, keep_n)
+      } else {
+        base::seq_len(n_train)
+      }
+      cols <- if (keep_p < p_train) {
+        base::sample(base::seq_len(p_train), keep_p)
+      } else {
+        base::seq_len(p_train)
+      }
+
+      #(b)
+      # negativer Gradient (MSE): Residuen = Y - f (Train)
+      g_train <- y_train[[fold]] - f_train[[fold]]
+
+      #(c)
+      # CART (Regressionsbaum) auf Teilstichprobe der Residuen trainieren
+      dat_sub <- data.frame(g = g_train[rows], x_train[[fold]][rows, cols,
+                              drop = FALSE
+                           ])
+      tree <- rpart::rpart(g ~ .,
+        data = dat_sub,
+        control = rpart::rpart.control(maxdepth = 3, cp = 0)
+      )
+
+
+      #Baum auf Train/Test Daten anwenden
+      f_cart_train <- as.numeric(stats::predict(tree,
+                                                newdata = x_train[[fold]]))
+      f_cart_test <- as.numeric(stats::predict(tree, newdata = x_test[[fold]]))
+
+      #(d)
+      #Residuen nachdem wir Baum haben
+      e_train <- y_train[[fold]] - (f_train[[fold]] + f_cart_train)
+
+      #(e)
+      # Random-Intercept auf die temporären Residuen (Train)
+      # (gruppenspezifische Fehler)
+      lmm <- lme4::lmer(e_train ~ 1 + (1 | id),
+        data = data.frame(
+                          e_train = e_train,
+                          id = id_train[[fold]]
+                        )
+      )
+      beta0 <- as.numeric(lme4::fixef(lmm)[1])
+      lmm_train <- as.numeric(stats::predict(lmm))
+      lmm_test <- as.numeric(stats::predict(
+        lmm,
+        newdata = data.frame(id = id_test[[fold]]),
+        allow.new.levels = TRUE
+      ))
+
+      #(f)
+      # Update: f_new = f_old + α * ( CART + (LMM - β0) )
+      # alpha um overfitting zu vermeiden
+      f_train[[fold]] <- f_train[[fold]] + alpha *
+        (f_cart_train + (lmm_train - beta0))
+      f_test[[fold]] <- f_test[[fold]] + alpha *
+        (f_cart_test + (lmm_test - beta0))
+
+      # RMSE-Verlauf (Train/Test) für Fold/Iteration speichern
+      # In Objekt von vorhin.
+      rmse_train_hist[iter, fold] <- rmse(y_train[[fold]], f_train[[fold]])
+      rmse_test_hist[iter, fold] <- rmse(y_test[[fold]], f_test[[fold]])
+    }
+
+    #(g)
+    ## mittleren Test-RMSE über alle Folds bestimmen
+    # Dient der bestimmung, ob iteration verbessert
+    mean_test_hist[iter] <- base::mean(rmse_test_hist[iter, ], na.rm = TRUE)
+
+
+    #(h)
+    #best_mean startet bei infinity und speichert
+    #kleinsten bisherigen rmse
+    #Mit Toleranz (1e-12) wird neue Verbesserung
+    #des RMSE akzeptiert
+    if (mean_test_hist[iter] + 1e-12 < best_mean) {
+      best_mean <- mean_test_hist[iter]
+      best_iter <- iter
+    }
+    #iter - best_iter, zählt wieviele iterationen
+    #seit letzter verbesserung vergangen
+    #Wenn (>= 5L) dann ist in den letzten 5
+    #iterationen keine Verbesserung
+    if (iter - best_iter >= 5L) {
+      base::message(sprintf(
+        "Fruehstopp bei Iteration %d (iter_final = %d).",
+        iter,
+        best_iter
+      ))
+      #Endet Schleife, falls keine Verbesserung
+      break
+    }
+  }
+
+  # finale Iteration after break
+  iter_final <- if (best_iter > 0L) {
+    best_iter
+  } else {
+    iter
+  }
+
+  # Sammle Step-3-Resultate für Diagnose/Plots
+  step3_out <- list(
+    iter_final = iter_final,
+    rmse_train_by_fold = rmse_train_hist[seq_len(iter_final), , drop = FALSE],
+    rmse_test_by_fold = rmse_test_hist[seq_len(iter_final), , drop = FALSE],
+    mean_test_rmse_path = mean_test_hist[seq_len(iter_final)],
+    colsample = colsample,
+    subsample = subsample,
+    alpha = alpha
+  )
+
+
+  # 4. Finales Modell -------------------------------------------------------
+
+  n <- nrow(x)
+  f <- rep(mean(y), n)
+  rmse_hist_final <- numeric(step3_out$iter_final)
+
+  #Finales Training auf Gesamtdaten
+  #Prozess bis auf festes iter_final identisch zu 3
+  for (iter in 1:step3_out$iter_final) {
+    keep_n <- max(1, floor(step3_out$subsample * n))
+    keep_p <- max(1, floor(step3_out$colsample * ncol(x)))
+    rows <- if (keep_n < n) {
+      base::sample.int(n, keep_n)
+    } else {
+      base::seq_len(n)
+    }
+    cols <- if (keep_p < ncol(x)) {
+      base::sample(base::seq_len(ncol(x)), keep_p)
+    } else {
+      base::seq_len(ncol(x))
+    }
+
+    g <- y - f
+    dat_sub <- data.frame(g = g[rows], x[rows, cols, drop = FALSE])
+    tree <- rpart::rpart(g ~ .,
+      data = dat_sub,
+      control = rpart::rpart.control(maxdepth = 3, cp = 0)
+    )
+    f_cart <- as.numeric(stats::predict(tree, newdata = x))
+
+    e <- y - (f + f_cart)
+    lmm <- lme4::lmer(e ~ 1 + (1 | id), data = data.frame(e = e, id = id))
+    beta0 <- as.numeric(lme4::fixef(lmm)[1])
+    lmm_fit <- as.numeric(stats::predict(
+      lmm,
+      newdata = data.frame(id = id),
+      allow.new.levels = TRUE
+    ))
+
+    f <- f + step3_out$alpha * (f_cart + (lmm_fit - beta0))
+    rmse_hist_final[iter] <- sqrt(mean((y - f)^2))
+  }
+
+  # sammle Step-4-Resultate (finales Training auf allen Daten)
+  step4_out <- list(
+    fitted_values = f,
+    rmse_final = rmse_hist_final[step3_out$iter_final],
+    rmse_path = rmse_hist_final,
+    iter_final = step3_out$iter_final,
+    colsample = step3_out$colsample,
+    subsample = step3_out$subsample,
+    alpha = step3_out$alpha
+  )
+
+  # baue das finale S3-Modellobjekt für komfortables print/plot/predict
+  final_model <- boostedRIRT(
+    X = x,
+    Y = y,
+    id = id,
+    colsample = step4_out$colsample,
+    subsample = step4_out$subsample,
+    alpha = step4_out$alpha,
+    iter_final = step4_out$iter_final,
+    maxdepth = maxdepth
+  )
+
+  invisible(
+    list(
+      best_params = best_params,
+      cv_summary  = summary(res),
+      step3_out   = step3_out,
+      step4_out   = step4_out,
+      model       = final_model
+    )
+  )
+  attr(final_model, "best_params") <- best_params
+  attr(final_model, "cv_summary")  <- summary(res)
+  attr(final_model, "step3_out")   <- step3_out
+  attr(final_model, "step4_out")   <- step4_out
+
+  # >>> NEU: direkt das S3-Objekt zurückgeben (KEINE äußere Liste)
+  return(final_model)
+}
+
+
+# S3 Objekte in seperatem Skript ------------------------------------------
